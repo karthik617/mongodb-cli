@@ -1,0 +1,29 @@
+{
+  "name": "mongodb-cli",
+  "version": "1.0.0",
+  "description": "mongodb on command line",
+  "main": "repl.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karthik617/mongodb-cli.git"
+  },
+  "keywords": [
+    "mongodb-cli",
+    "mongodb",
+    "repl",
+    "repl"
+  ],
+  "author": "yadavkarthik617@gmail.com",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/karthik617/mongodb-cli/issues"
+  },
+  "homepage": "https://github.com/karthik617/mongodb-cli#readme",
+  "dependencies": {
+    "mongodb": "^6.17.0",
+    "repl": "^0.1.3"
+  }
+}
