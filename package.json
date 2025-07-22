@@ -3,8 +3,15 @@
   "version": "1.0.0",
   "description": "mongodb on command line",
   "main": "repl.js",
+  "bin": {
+    "mongosh-custom": "./repl.js",
+    "msh": "./repl.js"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node repl.js"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   },
   "repository": {
     "type": "git",
@@ -23,7 +30,7 @@
   },
   "homepage": "https://github.com/karthik617/mongodb-cli#readme",
   "dependencies": {
-    "mongodb": "^6.17.0",
+    "mongodb": "^5.0.0",
     "repl": "^0.1.3"
   }
 }
