@@ -157,7 +157,7 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
         try {
           const alias = name.replace(/[-\s]/g, "_");
           context[alias] = wrapCollectionWithShellFind(db.collection(name));
-          // console.log(`📌 Alias added: ${alias} → db.collection("${name}")`);
+          console.log(`📌 Alias added: ${alias} → db.collection("${name}")`);
         } catch (err) {
           console.warn(`⚠️ Could not create alias for ${name}: ${err.message}`);
         }
@@ -440,6 +440,49 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
           console.log(util.inspect(doc, { colors: true, depth: null }));
         } catch (err) {
           console.error("⚠️", err.message);
+        }
+    
+        this.displayPrompt();
+      },
+    });
+    
+    r.defineCommand("sort", {
+      help: "Sort the last .find result. Usage: .sort <field> [asc|desc]",
+      async action(input) {
+        if (!r.context.$ || !Array.isArray(r.context.$)) {
+          console.log("⚠️ No previous find result to sort.");
+          this.displayPrompt();
+          return;
+        }
+    
+        const [field, direction = "asc"] = input.trim().split(/\s+/);
+        if (!field) {
+          console.log("⚠️ Usage: .sort <field> [asc|desc]");
+          this.displayPrompt();
+          return;
+        }
+    
+        try {
+          const sorted = [...r.context.$].sort((a, b) => {
+            const aVal = a[field];
+            const bVal = b[field];
+    
+            if (aVal === bVal) return 0;
+            if (aVal === undefined || aVal === null) return 1;
+            if (bVal === undefined || bVal === null) return -1;
+    
+            if (typeof aVal === "string" && typeof bVal === "string") {
+              return direction === "desc"
+                ? bVal.localeCompare(aVal)
+                : aVal.localeCompare(bVal);
+            }
+    
+            return direction === "desc" ? bVal - aVal : aVal - bVal;
+          });
+    
+          console.log(util.inspect(sorted, { depth: null, colors: true }));
+        } catch (err) {
+          console.error("❌ Sort failed:", err.message);
         }
     
         this.displayPrompt();
