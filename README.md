@@ -1,6 +1,5 @@
 ## For MAC
 > Create a Shell Alias
-
 ### Add to your shell configuration file (~/.bashrc, ~/.zshrc, etc.):
 ```
 alias mongosh-custom='node /full/path/to/your/paste.txt'
