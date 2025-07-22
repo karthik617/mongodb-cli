@@ -157,7 +157,7 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
         try {
           const alias = name.replace(/[-\s]/g, "_");
           context[alias] = wrapCollectionWithShellFind(db.collection(name));
-          console.log(`📌 Alias added: ${alias} → db.collection("${name}")`);
+          // console.log(`📌 Alias added: ${alias} → db.collection("${name}")`);
         } catch (err) {
           console.warn(`⚠️ Could not create alias for ${name}: ${err.message}`);
         }
@@ -289,7 +289,12 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
         let query = {};
         if (queryParts.length > 0) {
           try {
-            query = eval('(' + queryParts.join(' ') + ')'); // safe-ish for REPL use
+            // query = eval('(' + queryParts.join(' ') + ')'); // safe-ish for REPL use
+            const joined = queryParts.join(' ');
+            const transformed = joined.replace(/ObjectId\((["'`])(.+?)\1\)/g, (_, __, id) => {
+              return `new ObjectId("${id}")`;
+            });
+            query = eval(`(${transformed})`);
           } catch (e) {
             console.error('❌ Invalid query JSON:', e.message);
             return this.displayPrompt();
@@ -324,7 +329,12 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
         let query = {};
         if (queryParts.length) {
           try {
-            query = eval('(' + queryParts.join(' ') + ')'); // intentionally REPL-friendly
+            // query = eval('(' + queryParts.join(' ') + ')'); // intentionally REPL-friendly
+            const joined = queryParts.join(' ');
+            const transformed = joined.replace(/ObjectId\((["'`])(.+?)\1\)/g, (_, __, id) => {
+              return `new ObjectId("${id}")`;
+            });
+            query = eval(`(${transformed})`);
           } catch (e) {
             console.error('❌ Invalid query object:', e.message);
             return this.displayPrompt();
@@ -359,7 +369,12 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
     
         let pipeline = [];
         try {
-          pipeline = eval('(' + pipelineParts.join(' ') + ')'); // Safe for REPL-style input
+          // pipeline = eval('(' + pipelineParts.join(' ') + ')'); // Safe for REPL-style input
+          const joined = pipelineParts.join(' ');
+            const transformed = joined.replace(/ObjectId\((["'`])(.+?)\1\)/g, (_, __, id) => {
+              return `new ObjectId("${id}")`;
+            });
+            pipeline = eval(`(${transformed})`);
           if (!Array.isArray(pipeline)) throw new Error("Pipeline must be an array");
         } catch (e) {
           console.error('❌ Invalid pipeline JSON:', e.message);
@@ -410,11 +425,17 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
       help: "Find one doc. Usage: .findOne <collectionName> <optionalJSONFilter>",
       async action(line) {
         const [collName, ...filterParts] = line.trim().split(" ");
-        const filterStr = filterParts.join(" ");
         let filter = {};
     
         try {
-          if (filterStr) filter = eval(`(${filterStr})`); // caution with eval
+          if (filterParts.length > 0) {
+            const raw = filterParts.join(" ");
+            const transformed = raw.replace(/ObjectId\((["'`])(.+?)\1\)/g, (_, __, id) => {
+              return `new ObjectId("${id}")`;
+            });
+            filter = eval(`(${transformed})`); // Only one eval needed
+          }
+    
           const doc = await r.context.db.collection(collName).findOne(filter);
           console.log(util.inspect(doc, { colors: true, depth: null }));
         } catch (err) {
@@ -424,6 +445,7 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
         this.displayPrompt();
       },
     });
+    
 
     r.defineCommand("pretty", {
       help: "Toggle pretty JSON output",
