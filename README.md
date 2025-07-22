@@ -2,8 +2,8 @@
 > Create a Shell Alias
 ### Add to your shell configuration file (~/.bashrc, ~/.zshrc, etc.):
 ```
-alias mongosh-custom='node /full/path/to/your/paste.txt'
-alias msh='node /full/path/to/your/paste.txt'
+alias mongosh-custom='node /full/path/to/your/repl.js'
+alias msh='node /full/path/to/your/repl.js'
 ```
 ### Then reload your shell:
 ```
