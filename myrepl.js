@@ -50,6 +50,7 @@ rl.close();
       if (input === 'exit' || input === 'quit') {
         console.log('👋 Bye!');
         await client.close();
+        shell.close();
         process.exit(0);
       }
 

@@ -54,6 +54,40 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
     return csv.join("\n");
   }
 
+  function parseObjectLiteral(str) {
+    try {
+      // Wrap keys in double quotes if not already
+      const json = str
+        .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')  // quote keys
+        .replace(/'/g, '"'); // convert single quotes to double quotes
+  
+      return JSON.parse(json);
+    } catch (err) {
+      console.warn("⚠️ parseObjectLiteral failed:", err.message);
+      return null;
+    }
+  }
+  
+  const formatDoc = (doc) => {
+    if (doc instanceof ObjectId) {
+      return `ObjectId("${doc.toHexString()}")`;
+    }
+  
+    if (Array.isArray(doc)) {
+      return doc.map(formatDoc);
+    }
+  
+    if (doc && typeof doc === "object") {
+      const out = {};
+      for (const [k, v] of Object.entries(doc)) {
+        out[k] = formatDoc(v);
+      }
+      return out;
+    }
+  
+    return doc;
+  };  
+
   let client;
   try {
     client = new MongoClient(uri, options);
@@ -66,29 +100,23 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
     // Start REPL shell
     const r = repl.start({
       prompt: `${currentDb.databaseName} > `,
+      useColors: true,
       useGlobal: true,
       ignoreUndefined: true,
       eval: async (cmd, context, filename, callback) => {
         try {
           const script = new vm.Script(cmd, { filename });
           const result = await script.runInContext(vm.createContext(context));
-          // 🪄 Nicely format the output
-          //   if (Array.isArray(result)) {
-          //     console.table(result.slice(0, 10));
-          //   } else {
-          if (prettyOutput && typeof result === "object") {
-            console.log(
-              util.inspect(result, {
-                depth: null,
-                colors: true,
-                compact: false,
-              })
-            );
+          if (Array.isArray(result)) {
+            const formatted = result.map(formatDoc);
+            if (prettyOutput) {
+              console.log(util.inspect(formatted, { depth: null, colors: true, compact: false }));
+            } else {
+              console.dir(formatted, { depth: null });
+            }
           } else {
             console.dir(result, { depth: null });
-          }
-          //   }
-
+          }          
           // 📦 Store in REPL context if needed (optional)
           context.$ = result; // Like native Mongo shell
 
@@ -111,13 +139,24 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
     r.context.NumberInt = (val) => parseInt(val);
     r.context.Timestamp = Timestamp;
 
+    function wrapCollectionWithShellFind(collection) {
+      const originalFind = collection.find.bind(collection);
+      collection.find = (query = {}, projection = {}) => {
+        if (projection && !projection.projection) {
+          return originalFind(query, { projection });
+        }
+        return originalFind(query, projection); // already valid
+      };
+      return collection;
+    }
+
     async function setupCollectionAliases(context, db) {
       const collections = await db.listCollections().toArray();
 
       for (const { name } of collections) {
         try {
           const alias = name.replace(/[-\s]/g, "_");
-          context[alias] = db.collection(name);
+          context[alias] = wrapCollectionWithShellFind(db.collection(name));
           console.log(`📌 Alias added: ${alias} → db.collection("${name}")`);
         } catch (err) {
           console.warn(`⚠️ Could not create alias for ${name}: ${err.message}`);
@@ -127,21 +166,25 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
 
     // Custom commands
     r.defineCommand("use", {
-      help: "Switch database. Usage: .use <dbname>",
+      help: "Switch to another DB",
       async action(dbname) {
         if (!dbname) {
           console.log("⚠️  Please provide a database name");
           this.displayPrompt();
           return;
         }
-        currentDb = client.db(dbname.trim());
-        r.context.db = currentDb;
-        this.setPrompt(`${dbname.trim()} > `);
-        console.log(`✅ Switched to DB: ${dbname.trim()}`);
-        await setupCollectionAliases(r.context, currentDb);
+    
+        const trimmed = dbname.trim();
+        const db = client.db(trimmed);
+        r.context.db = db;
+        r.context.currentDbName = trimmed;
+    
+        this.setPrompt(`${trimmed} > `);
+        console.log(`✅ Switched to DB: ${trimmed}`);
+        await setupCollectionAliases(r.context, db);
         this.displayPrompt();
       },
-    });
+    });    
 
     r.defineCommand("databases", {
       help: "List all databases",
@@ -156,120 +199,228 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
     r.defineCommand("collections", {
       help: "List collections in current DB",
       async action() {
-        const collections = await currentDb.listCollections().toArray();
-        console.log(`📁 Collections in "${currentDb.databaseName}":`);
+        const collections = await r.context.db.listCollections().toArray();
+        console.log(`📁 Collections in "${r.context.db.databaseName}":`);
         collections.forEach((col) => console.log(` - ${col.name}`));
         this.displayPrompt();
       },
     });
 
     r.defineCommand("export", {
-      help: "Export query results. Usage: .export <collection> [filterJSON] [projectionJSON] [filename]",
+      help: "Export query results. Usage: .export <collection> [filterObject] [projectionObject] [filename]",
       async action(input) {
-        const args = input.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
-        if (args.length < 1) {
-          console.log(
-            "⚠️ Usage: .export <collection> [filterJSON] [projectionJSON] [filename]"
-          );
+        // Match brace-delimited arguments like {foo: "bar"} even if spaced
+        const regex = /{[^{}]*}|"[^"]*"|\S+/g;
+        const rawArgs = input.match(regex) || [];
+    
+        const [collName, rawFilter, rawProjection, filename] = rawArgs.map(arg =>
+          arg.trim().replace(/^['"]|['"]$/g, "")
+        );
+    
+        if (!collName) {
+          const result = this.context.$
+          if (!result) {
+            console.log("⚠️ Usage: .export <collection> [filterObject] [projectionObject] [filename]");
+            return this.displayPrompt();
+          }
+          const csvData = jsonToCsv(result); // Make sure you’ve defined this function
+          const fullPath = path.resolve(process.cwd(), 'export.csv');
+          await fs.promises.writeFile(fullPath, csvData);
+          console.log(`✅ Exported ${result.length} docs to CSV: ${fullPath}`);
           return this.displayPrompt();
         }
-
-        const collName = args[0];
+    
         let filter = {};
         let projection = {};
-        let file = `${collName}.json`;
+        let file = filename;
 
-        if (args.length >= 2) {
-          try {
-            filter = JSON.parse(args[1].replace(/^['"]|['"]$/g, ""));
-          } catch {
-            console.log("⚠️ Invalid filter JSON - exporting all");
+        if (!file) {
+          if (rawFilter && (rawFilter.endsWith(".csv") || rawFilter.endsWith(".json"))) {
+            file = rawFilter;
+          } else if (rawProjection && (rawProjection.endsWith(".csv") || rawProjection.endsWith(".json"))) {
+            file = rawProjection;
+          } else {
+            file = `${collName}.json`;
           }
         }
-
-        if (args.length >= 3) {
-          try {
-            projection = JSON.parse(args[2].replace(/^['"]|['"]$/g, ""));
-          } catch {
-            console.log(
-              "⚠️ Invalid projection JSON - exporting full documents"
-            );
-          }
+    
+        if (rawFilter && rawFilter.startsWith("{")) {
+          const parsed = parseObjectLiteral(rawFilter);
+          if (parsed) filter = parsed;
+          else console.log("⚠️ Invalid filter - exporting all");
         }
-
-        if (args.length >= 4) {
-          file = args[3];
+    
+        if (rawProjection && rawProjection.startsWith("{")) {
+          const parsed = parseObjectLiteral(rawProjection);
+          if (parsed) projection = parsed;
+          else console.log("⚠️ Invalid projection - exporting full documents");
         }
-
+    
         try {
-          const cursor = currentDb
-            .collection(collName)
-            .find(filter, { projection });
+          const cursor = r.context.db.collection(collName).find(filter, { projection });
           const docs = await cursor.toArray();
-
-          const fullPath = require("path").resolve(process.cwd(), file);
-
+          const fullPath = path.resolve(process.cwd(), file);
+    
           if (file.endsWith(".csv")) {
-            const csvData = jsonToCsv(docs);
+            const csvData = jsonToCsv(docs); // Make sure you’ve defined this function
             await fs.promises.writeFile(fullPath, csvData);
             console.log(`✅ Exported ${docs.length} docs to CSV: ${fullPath}`);
           } else {
-            await fs.promises.writeFile(
-              fullPath,
-              JSON.stringify(docs, null, 2)
-            );
+            await fs.promises.writeFile(fullPath, JSON.stringify(docs, null, 2));
             console.log(`✅ Exported ${docs.length} docs to JSON: ${fullPath}`);
           }
         } catch (err) {
           console.error(`❌ Export failed: ${err.message}`);
         }
-
+    
         this.displayPrompt();
       },
     });
-
-    r.defineCommand("count", {
-      help: "Get document count. Usage: .count <collection>",
-      async action(collName) {
-        if (!collName) return console.log("⚠️ Usage: .count <collection>");
-        const count = await currentDb.collection(collName).countDocuments();
-        console.log(`📊 ${collName} count: ${count}`);
-        this.displayPrompt();
-      },
-    });
-
-    r.defineCommand("stats", {
-      help: "Get stats for a collection. Usage: .stats <collection>",
-      async action(collName) {
-        if (!collName) return console.log("⚠️ Usage: .stats <collection>");
-        const stats = await currentDb.command({ collStats: collName });
-        if (prettyOutput && typeof result === "object") {
-          console.log(
-            util.inspect(result, { depth: null, colors: true, compact: false })
-          );
-        } else {
-          console.dir(result, { depth: null });
+    
+    r.defineCommand('count', {
+      help: 'Count documents in a collection with an optional query.\nUsage: .count <collection> [<queryJSON>]',
+      async action(input) {
+        const [collName, ...queryParts] = input.trim().split(/\s+/);
+        if (!collName) {
+          console.log('⚠️  Usage: .count <collection> [<queryJSON>]');
+          return this.displayPrompt();
         }
+    
+        let query = {};
+        if (queryParts.length > 0) {
+          try {
+            query = eval('(' + queryParts.join(' ') + ')'); // safe-ish for REPL use
+          } catch (e) {
+            console.error('❌ Invalid query JSON:', e.message);
+            return this.displayPrompt();
+          }
+        }
+    
+        try {
+          const count = await r.context.db.collection(collName).countDocuments(query);
+          console.log(`📊 Count for "${collName}": ${count}`);
+        } catch (err) {
+          console.error('❌ Error:', err.message);
+        }
+    
+        this.displayPrompt();
+      }
+    });
+
+    r.defineCommand('distinct', {
+      help: 'Get distinct values for a field in a collection.\nUsage: .distinct <collection> <field> [<query>]',
+      async action(input) {
+        const args = input.trim().match(/"[^"]+"|'[^']+'|\S+/g) || [];
+    
+        const [collName, field, ...queryParts] = args.map(arg =>
+          arg.replace(/^["']|["']$/g, '')
+        );
+    
+        if (!collName || !field) {
+          console.log('⚠️ Usage: .distinct <collection> <field> [<query>]');
+          return this.displayPrompt();
+        }
+    
+        let query = {};
+        if (queryParts.length) {
+          try {
+            query = eval('(' + queryParts.join(' ') + ')'); // intentionally REPL-friendly
+          } catch (e) {
+            console.error('❌ Invalid query object:', e.message);
+            return this.displayPrompt();
+          }
+        }
+    
+        try {
+          const values = await r.context.db.collection(collName).distinct(field, query);
+          console.log(`🔎 Distinct values for "${field}" (${values.length}):`);
+          console.log(values);
+        } catch (err) {
+          console.error('❌ Error:', err.message);
+        }
+    
+        this.displayPrompt();
+      }
+    });
+
+    r.defineCommand('aggregate', {
+      help: 'Run an aggregation pipeline.\nUsage: .aggregate <collection> <pipelineJSON>',
+      async action(input) {
+        const args = input.trim().match(/"[^"]+"|'[^']+'|\S+/g) || [];
+    
+        const [collName, ...pipelineParts] = args.map(arg =>
+          arg.replace(/^['"]|['"]$/g, '')
+        );
+    
+        if (!collName || pipelineParts.length === 0) {
+          console.log('⚠️ Usage: .aggregate <collection> <pipelineJSON>');
+          return this.displayPrompt();
+        }
+    
+        let pipeline = [];
+        try {
+          pipeline = eval('(' + pipelineParts.join(' ') + ')'); // Safe for REPL-style input
+          if (!Array.isArray(pipeline)) throw new Error("Pipeline must be an array");
+        } catch (e) {
+          console.error('❌ Invalid pipeline JSON:', e.message);
+          return this.displayPrompt();
+        }
+    
+        try {
+          const cursor = r.context.db.collection(collName).aggregate(pipeline);
+          const result = await cursor.toArray();
+    
+          if (Array.isArray(result)) {
+            console.table(result.slice(0, 10)); // Preview first 10
+          } else {
+            console.dir(result, { depth: null });
+          }
+    
+          // Optionally store in context for further use
+          this.context.$ = result;
+        } catch (err) {
+          console.error('❌ Aggregation failed:', err.message);
+        }
+    
+        this.displayPrompt();
+      }
+    });
+    
+    r.defineCommand("indexes", {
+      help: "List indexes of a collection. Usage: .indexes <collectionName>",
+      async action(collName) {
+        if (!collName) {
+          console.log("❗ Provide a collection name");
+          this.displayPrompt();
+          return;
+        }
+    
+        try {
+          const indexes = await r.context.db.collection(collName).indexes();
+          console.table(indexes);
+        } catch (err) {
+          console.error("⚠️", err.message);
+        }
+    
         this.displayPrompt();
       },
     });
-
-    r.defineCommand("top", {
-      help: "Find top 5 docs from a collection. Usage: .top <collection>",
-      async action(collName) {
-        if (!collName) return console.log("⚠️ Usage: .top <collection>");
-        const docs = await currentDb
-          .collection(collName)
-          .find()
-          .limit(5)
-          .toArray();
-        if (prettyOutput && typeof result === "object") {
-          console.log(
-            util.inspect(result, { depth: null, colors: true, compact: false })
-          );
-        } else {
-          console.dir(result, { depth: null });
+    
+    r.defineCommand("findOne", {
+      help: "Find one doc. Usage: .findOne <collectionName> <optionalJSONFilter>",
+      async action(line) {
+        const [collName, ...filterParts] = line.trim().split(" ");
+        const filterStr = filterParts.join(" ");
+        let filter = {};
+    
+        try {
+          if (filterStr) filter = eval(`(${filterStr})`); // caution with eval
+          const doc = await r.context.db.collection(collName).findOne(filter);
+          console.log(util.inspect(doc, { colors: true, depth: null }));
+        } catch (err) {
+          console.error("⚠️", err.message);
         }
+    
         this.displayPrompt();
       },
     });
@@ -283,15 +434,42 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
       },
     });
 
-    r.defineCommand("clear", {
-      help: "Clear the console screen",
+    r.defineCommand("table", {
+      help: "Show table output",
       action() {
-        console.clear();
+        // 🪄 Nicely format the output
+        if (this.context.$ && Array.isArray(this.context.$)) {
+          console.table(this.context.$);
+        } else {
+          let result = this.context.$;
+          if (!result) {
+            console.error("⚠️ Usage: .table No Results");
+            return this.displayPrompt();
+          }
+          if (Array.isArray(result)) {
+            const formatted = result.map(formatDoc);
+            if (prettyOutput) {
+              console.log(util.inspect(formatted, { depth: null, colors: true, compact: false }));
+            } else {
+              console.dir(formatted, { depth: null });
+            }
+          } else {
+            console.dir(result, { depth: null });
+          }
+        }
         this.displayPrompt();
       },
     });
 
-    r.defineCommand("helpme", {
+    r.defineCommand("clear", {
+      help: "Clear the console screen",
+      action() {
+        process.stdout.write('\x1Bc');
+        this.displayPrompt();
+      },
+    });
+
+    r.defineCommand("help", {
       help: "Show available REPL commands",
       action() {
         console.log(`
@@ -300,15 +478,23 @@ rl.question("Enter MongoDB connection URI: ", async (uri) => {
       .databases                                           - List all DBs
       .collections                                         - List collections in current DB
       .export <collection> [query] [projection] [filename] - Export query results
-      .count <collection>                                  - Get document count
-      .stats <collection>                                  - Get stats for a collection
-      .top <collection>                                    - Find top 5 docs from a collection
+      .count <collection> [query]                          - Get document count
+      .distinct <collection> <field> [query]               - Get distinct values for a field
+      .aggregate <collection> <pipelineJSON>               - Run an aggregation pipeline
+      .indexes <collectionName>                            - List indexes of a collection
+      .findOne <collectionName> <optionalJSONFilter>       - Find one doc
       .exit / .quit                                        - Exit the shell
       .pretty                                              - Toggle pretty JSON output
       .clear                                               - Clear the console screen
+      .table                                               - Show table output
       
       📌 Aliases like: journey.find() or logs.findOne() also work
-      📌 Export ex: .export journey '{"status":"active"}' '{"status":1}' active_data.csv
+      📌 Export ex: .export journey {"status":"active"} {} active_data.csv
+      📌 Export ex: .export journey {"status":"active"} {"status":1} active_data.csv
+      📌 Count ex: .count journey {"status":"active"}
+      📌 Distinct ex: .distinct journey "status"
+      📌 Distinct ex: .distinct journey "status" {"status":"active"}
+      📌 Aggregate ex: .aggregate journey [{$match: {"status": "active"}}, {$group: {_id: "$status", count: {$sum: 1}}}]
           `);
         this.displayPrompt();
       },
