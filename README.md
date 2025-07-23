@@ -14,6 +14,8 @@ npm install -g mongodb-cli (mongodb-cli : package name in package.json)
 ```
 alias mongosh-custom='node /full/path/to/your/repl.js'
 alias msh='node /full/path/to/your/repl.js'
+alias pgs='node /full/path/to/your/replPG.js'
+alias pgsl-custom='node /full/path/to/your/replPG.js'
 ```
 ### Then reload your shell:
 ```
