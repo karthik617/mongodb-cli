@@ -5,10 +5,13 @@
   "main": "repl.js",
   "bin": {
     "mongosh-custom": "./repl.js",
-    "msh": "./repl.js"
+    "msh": "./repl.js",
+    "pgs": "./replPG.js",
+    "pgsl-custom": "./replPG.js"
   },
   "scripts": {
-    "start": "node repl.js"
+    "start-mongo": "node repl.js",
+    "start-pg": "node replPG.js"
   },
   "engines": {
     "node": ">=14.0.0"
@@ -31,6 +34,8 @@
   "homepage": "https://github.com/karthik617/mongodb-cli#readme",
   "dependencies": {
     "mongodb": "^5.0.0",
+    "pg": "^8.16.3",
+    "prompt-sync": "^4.2.0",
     "repl": "^0.1.3"
   }
 }
