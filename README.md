@@ -1,3 +1,10 @@
+## Globally Installed
+> Git clone this repo
+> Run the following command in the cloned directory
+```
+npm install -g mongodb-cli (mongodb-cli : package name in package.json)
+```
+
 ## For MAC
 > Create a Shell Alias
 ### Add to your shell configuration file (~/.bashrc, ~/.zshrc, etc.):
